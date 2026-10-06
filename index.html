@@ -1,1 +1,588 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>星空 · 许愿</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
 
+  html, body {
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    color: #fff;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #sky {
+    position: fixed;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+  }
+
+  .title {
+    position: fixed;
+    top: calc(28px + env(safe-area-inset-top, 0px));
+    left: 0; right: 0;
+    text-align: center;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .title h1 {
+    font-size: 15px;
+    font-weight: 400;
+    letter-spacing: 0.4em;
+    text-indent: 0.4em;
+    color: rgba(255,255,255,0.72);
+  }
+  .title p {
+    margin-top: 8px;
+    font-size: 11px;
+    letter-spacing: 0.3em;
+    text-indent: 0.3em;
+    color: rgba(255,255,255,0.3);
+  }
+
+  .wish-bar {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(32px + env(safe-area-inset-bottom, 0px));
+    width: min(520px, calc(100% - 36px));
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 6px 18px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 999px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    z-index: 5;
+    transition: border-color .3s, background .3s;
+  }
+  .wish-bar:focus-within {
+    background: rgba(255,255,255,0.1);
+    border-color: rgba(255,255,255,0.28);
+  }
+  .wish-bar input {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: 0;
+    outline: none;
+    font-family: inherit;
+    font-size: 14px;
+    color: #fff;
+    padding: 10px 0;
+    letter-spacing: 0.03em;
+  }
+  .wish-bar input::placeholder { color: rgba(255,255,255,0.3); }
+  .wish-bar button {
+    flex: none;
+    padding: 10px 20px;
+    border: 0;
+    border-radius: 999px;
+    background: #fff;
+    color: #000;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: transform .15s, opacity .2s;
+  }
+  .wish-bar button:hover { opacity: 0.88; }
+  .wish-bar button:active { transform: scale(0.95); }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+    transform: translate(-50%, 10px);
+    padding: 9px 22px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.16);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    color: rgba(255,255,255,0.9);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .4s, transform .4s;
+    z-index: 5;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 480px) {
+    .wish-bar input { font-size: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="sky"></canvas>
+
+<div class="title">
+  <h1>星 空 许 愿</h1>
+  <p>点击夜空，让流星更多</p>
+</div>
+
+<form class="wish-bar" id="wishForm">
+  <input id="wishInput" type="text" maxlength="30" placeholder="写下你的愿望…" autocomplete="off" />
+  <button type="submit">放飞</button>
+</form>
+
+<div class="toast" id="toast">愿望已随流星飞去 ✦</div>
+
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('sky');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0, DPR = 1;
+  let stars = [];
+  let meteors = [];
+  let wishes = [];
+  let lastTime = 0;
+  let spawnTimer = 0;
+
+  let boost = 0;
+  const MAX_BOOST = 30;
+
+  const BASE_ANGLE = Math.PI * 0.75;
+
+  /* ============================================================
+     柔和星星贴图
+  ============================================================ */
+  const STAR_COLORS = {
+    white: '255,255,255',
+    blue:  '190,212,255',
+    warm:  '255,242,214'
+  };
+  const starSprites = {};
+
+  function makeStarSprite(rgb) {
+    const S = 64;
+    const c = document.createElement('canvas');
+    c.width = c.height = S;
+    const g = c.getContext('2d');
+    const grd = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    grd.addColorStop(0.00, 'rgba(' + rgb + ',1)');
+    grd.addColorStop(0.10, 'rgba(' + rgb + ',0.72)');
+    grd.addColorStop(0.26, 'rgba(' + rgb + ',0.30)');
+    grd.addColorStop(0.50, 'rgba(' + rgb + ',0.08)');
+    grd.addColorStop(0.75, 'rgba(' + rgb + ',0.02)');
+    grd.addColorStop(1.00, 'rgba(' + rgb + ',0)');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, S, S);
+    return c;
+  }
+
+  for (const key in STAR_COLORS) {
+    starSprites[key] = makeStarSprite(STAR_COLORS[key]);
+  }
+
+  /* ---------- 尺寸 ---------- */
+  function resize() {
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    initStars();
+  }
+
+  /* ---------- 普通星星 ---------- */
+  function initStars() {
+    stars = [];
+    const count = Math.min(420, Math.floor(W * H / 5000));
+    for (let i = 0; i < count; i++) {
+      const big = Math.random() < 0.06;
+      const r = big
+        ? 1.0 + Math.random() * 0.9
+        : 0.25 + Math.random() * 0.7;
+
+      const colorRoll = Math.random();
+      const sprite = colorRoll < 0.12
+        ? (Math.random() < 0.5 ? 'blue' : 'warm')
+        : 'white';
+
+      stars.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: r,
+        base: big ? 0.55 + Math.random() * 0.35 : 0.22 + Math.random() * 0.42,
+        speed: 0.25 + Math.random() * 1.1,
+        phase: Math.random() * Math.PI * 2,
+        speed2: 0.4 + Math.random() * 1.7,
+        phase2: Math.random() * Math.PI * 2,
+        sprite: sprite
+      });
+    }
+  }
+
+  /* ---------- 流星 ---------- */
+  function createMeteor(opts) {
+    opts = opts || {};
+
+    let angle = BASE_ANGLE;
+    if (opts.vary !== false && Math.random() < 0.16) {
+      angle += (Math.random() - 0.5) * 0.12;
+    }
+
+    const speed = opts.speed || (450 + Math.random() * 550);
+    const vx = Math.cos(angle) * speed;
+    const vy = Math.sin(angle) * speed;
+
+    let x, y;
+    const r = Math.random();
+    if (r < 0.5) {
+      x = W * (0.30 + Math.random() * 0.85);
+      y = -80 - Math.random() * 140;
+    } else {
+      x = W + 80 + Math.random() * 140;
+      y = -80 + Math.random() * H * 0.6;
+    }
+
+    return {
+      x, y, vx, vy,
+      life: 0,
+      maxLife: opts.maxLife || (2.2 + Math.random() * 1.6),
+      length: opts.length || (110 + Math.random() * 110),
+      width: opts.width || (1 + Math.random() * 1.2),
+      alpha: 0,
+      text: opts.text || null
+    };
+  }
+
+  function spawnMeteor(opts) {
+    const limit = 90 + boost * 12;
+    if (meteors.length > limit) return;
+    meteors.push(createMeteor(opts));
+  }
+
+  /* ---------- 绘制普通星星 ---------- */
+  function drawStars(t) {
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+
+      const w1 = Math.sin(t * s.speed + s.phase);
+      const w2 = Math.sin(t * s.speed2 + s.phase2);
+      let tw = 0.68 + 0.18 * w1 + 0.14 * w2;
+      tw = tw * tw * (3 - 2 * tw);
+
+      const a = s.base * tw;
+      if (a < 0.004) continue;
+
+      const size = 1.4 + s.r * 2.9;
+
+      ctx.globalAlpha = a;
+      ctx.drawImage(
+        starSprites[s.sprite],
+        s.x - size, s.y - size,
+        size * 2, size * 2
+      );
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* ---------- 绘制流星 ---------- */
+  function drawMeteors() {
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (let i = 0; i < meteors.length; i++) {
+      const m = meteors[i];
+      if (m.alpha <= 0.01) continue;
+
+      const len = Math.hypot(m.vx, m.vy);
+      const ux = m.vx / len;
+      const uy = m.vy / len;
+      const tailX = m.x - ux * m.length;
+      const tailY = m.y - uy * m.length;
+
+      const grad = ctx.createLinearGradient(m.x, m.y, tailX, tailY);
+      grad.addColorStop(0, 'rgba(255,255,255,' + m.alpha + ')');
+      grad.addColorStop(0.3, 'rgba(200,220,255,' + (m.alpha * 0.5) + ')');
+      grad.addColorStop(1, 'rgba(150,180,255,0)');
+
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = m.width;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(m.x, m.y);
+      ctx.lineTo(tailX, tailY);
+      ctx.stroke();
+
+      const glowR = m.width * 5;
+      const glow = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, glowR);
+      glow.addColorStop(0, 'rgba(255,255,255,' + (m.alpha * 0.9) + ')');
+      glow.addColorStop(0.4, 'rgba(190,215,255,' + (m.alpha * 0.35) + ')');
+      glow.addColorStop(1, 'rgba(150,180,255,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, glowR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+
+    for (let i = 0; i < meteors.length; i++) {
+      const m = meteors[i];
+      if (!m.text || m.alpha <= 0.15) continue;
+
+      let textFade;
+      if (m.life < 0.3) textFade = 0;
+      else if (m.life < 0.7) textFade = (m.life - 0.3) / 0.4;
+      else if (m.life < 1.6) textFade = 1;
+      else if (m.life < 2.2) textFade = 1 - (m.life - 1.6) / 0.6;
+      else textFade = 0;
+
+      if (textFade <= 0.01) continue;
+
+      const len = Math.hypot(m.vx, m.vy);
+      const ux = m.vx / len;
+      const uy = m.vy / len;
+      const textAlpha = m.alpha * 0.85 * textFade;
+
+      ctx.font = '13px -apple-system, "PingFang SC", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(235,242,255,' + textAlpha.toFixed(3) + ')';
+      ctx.fillText(m.text, m.x - ux * m.length * 0.65 + 10, m.y - uy * m.length * 0.65);
+    }
+  }
+
+  /* ---------- 绘制许愿星星（纯柔和圆形，无十字星芒） ---------- */
+  function drawWishes() {
+    for (let i = 0; i < wishes.length; i++) {
+      const w = wishes[i];
+
+      // 双频柔和呼吸
+      const p1 = Math.sin(w.phase);
+      const p2 = Math.sin(w.phase * 0.53 + 1.7);
+      let pulse = 0.72 + 0.18 * p1 + 0.10 * p2;
+      pulse = pulse * pulse * (3 - 2 * pulse);
+
+      const a = w.alpha * pulse;
+      if (a <= 0.004) continue;
+
+      // 三层圆形光晕，从外到内逐渐变亮，边缘自然消隐
+      const layers = [
+        { r: 32, stops: [
+          [0.0, 0.06],
+          [0.5, 0.03],
+          [1.0, 0.0]
+        ]},
+        { r: 18, stops: [
+          [0.0, 0.20],
+          [0.4, 0.08],
+          [1.0, 0.0]
+        ]},
+        { r: 8, stops: [
+          [0.0, 0.85],
+          [0.4, 0.35],
+          [1.0, 0.0]
+        ]}
+      ];
+
+      for (let k = 0; k < layers.length; k++) {
+        const L = layers[k];
+        const grd = ctx.createRadialGradient(w.x, w.y, 0, w.x, w.y, L.r);
+        for (let s = 0; s < L.stops.length; s++) {
+          grd.addColorStop(
+            L.stops[s][0],
+            'rgba(255,255,255,' + (a * L.stops[s][1]) + ')'
+          );
+        }
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.arc(w.x, w.y, L.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 中心极小的亮核，让星星有聚焦点
+      const core = ctx.createRadialGradient(w.x, w.y, 0, w.x, w.y, 3);
+      core.addColorStop(0, 'rgba(255,255,255,' + a + ')');
+      core.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = core;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 愿望文字：短暂出现后消失
+      let textFade;
+      if (w.textAge < 0.3) textFade = w.textAge / 0.3;
+      else if (w.textAge < 1.5) textFade = 1;
+      else if (w.textAge < 2.2) textFade = 1 - (w.textAge - 1.5) / 0.7;
+      else textFade = 0;
+
+      if (textFade > 0.01) {
+        ctx.font = '13px -apple-system, "PingFang SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.shadowColor = 'rgba(180,210,255,0.9)';
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = 'rgba(235,242,255,' + (textFade * 0.9) + ')';
+        ctx.fillText(w.text, w.x, w.y + 16);
+        ctx.shadowBlur = 0;
+      }
+    }
+  }
+
+  /* ---------- 更新 ---------- */
+  function update(dt) {
+    for (let i = meteors.length - 1; i >= 0; i--) {
+      const m = meteors[i];
+      m.life += dt;
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+
+      const fadeIn = Math.max(0, Math.min(1, m.life * 6));
+      const lifeRatio = m.life / m.maxLife;
+      const fadeOut = lifeRatio > 0.65
+        ? Math.max(0, 1 - (lifeRatio - 0.65) / 0.35)
+        : 1;
+
+      m.alpha = fadeIn * fadeOut;
+
+      if (m.x < -300 || m.x > W + 300 || m.y > H + 300 || m.alpha <= 0.005) {
+        meteors.splice(i, 1);
+      }
+    }
+
+    for (let i = 0; i < wishes.length; i++) {
+      const w = wishes[i];
+      if (w.alpha < 1) w.alpha = Math.min(1, w.alpha + dt * 0.8);
+      w.phase += dt * 1.5;
+      w.textAge += dt;
+    }
+  }
+
+  /* ---------- 主循环 ---------- */
+  function loop(now) {
+    requestAnimationFrame(loop);
+
+    if (!lastTime) lastTime = now;
+    let dt = (now - lastTime) / 1000;
+    lastTime = now;
+    if (dt > 0.05) dt = 0.05;
+
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      const baseInterval = Math.max(0.05, 0.16 - boost * 0.0035);
+      spawnTimer = baseInterval + Math.random() * 0.3;
+
+      const extra = Math.floor(boost / 5);
+      const n = 1 + ((Math.random() * 2) | 0) + extra;
+      for (let i = 0; i < n; i++) spawnMeteor();
+    }
+
+    update(dt);
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    const t = now / 1000;
+    drawStars(t);
+    drawMeteors();
+    drawWishes();
+  }
+
+  /* ---------- 许愿 ---------- */
+  const form = document.getElementById('wishForm');
+  const input = document.getElementById('wishInput');
+  const toastEl = document.getElementById('toast');
+  let toastTimer = 0;
+
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+  }
+
+  function submitWish(text) {
+    text = text.trim().slice(0, 30);
+    if (!text) return;
+
+    const m = createMeteor({
+      speed: 320,
+      length: 280,
+      width: 2.8,
+      maxLife: 4.5
+    });
+    m.text = text;
+    meteors.push(m);
+
+    const w = {
+      x: W * 0.1 + Math.random() * W * 0.8,
+      y: H * 0.1 + Math.random() * H * 0.6,
+      text: text,
+      alpha: 0,
+      phase: Math.random() * Math.PI * 2,
+      textAge: 0
+    };
+    wishes.push(w);
+    if (wishes.length > 80) wishes.shift();
+
+    toast('愿望已随流星飞去 ✦');
+  }
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitWish(input.value);
+    input.value = '';
+    input.blur();
+  });
+
+  /* ---------- 点击背景：整体增多 ---------- */
+  canvas.addEventListener('pointerdown', () => {
+    if (boost < MAX_BOOST) boost++;
+
+    const batch = 1 + Math.floor(boost / 4);
+    for (let i = 0; i < batch; i++) {
+      const m = createMeteor({
+        vary: Math.random() < 0.16,
+        speed: 450 + Math.random() * 550
+      });
+      m.y -= Math.random() * 220;
+      m.x -= Math.random() * 220;
+      meteors.push(m);
+    }
+  });
+
+  /* ---------- 窗口调整 ---------- */
+  let resizeTimer = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(resize, 150);
+  });
+
+  /* ---------- 启动 ---------- */
+  resize();
+
+  for (let i = 0; i < 10; i++) {
+    const m = createMeteor();
+    m.life = -i * 0.25;
+    meteors.push(m);
+  }
+
+  requestAnimationFrame(loop);
+})();
+</script>
+
+</body>
+</html>
